@@ -15,7 +15,7 @@ class Settings(BaseSettings):
 
     # String de conexão com o banco de dados. 
     # Atualmente configurada para um SQLite local em um caminho específico.
-    DATABASE_URL: str = "C:\Users\Master\Desktop\SOFTWARE_ELETROLISADOR\DATABASE\database.db"
+    DATABASE_URL: str = "sqlite:///C:/Users/Master/Desktop/SOFTWARE_ELETROLISADOR/DATABASE/database.db"
 
     class Config:
         # Permite que o Pydantic ignore campos extras e trate strings de forma case-insensitive

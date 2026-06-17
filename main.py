@@ -4,6 +4,7 @@ import sys
 import time
 import platform
 import subprocess
+import webbrowser
 from datetime import datetime
 from typing import Optional
 
@@ -15,9 +16,9 @@ ASSET_ID = os.environ.get("ASSET_ID", "MD01BR01")
 LOOP_SECONDS = float(os.environ.get("LOOP_SECONDS", "1.0"))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-ALGO_DIR = os.path.join(BASE_DIR, "ALGORITHMS_AND_DATA")
-FASTAPI_DIR = os.path.join(BASE_DIR, "FASTAPI")
-REACT_DIR = os.path.join(BASE_DIR, "REACT", "frontend")
+ALGO_DIR    = os.path.join(BASE_DIR, "ALGORITHMS_AND_DATA")
+FASTAPI_DIR = os.path.join(BASE_DIR, "API", "FASTAPI")
+REACT_DIR   = os.path.join(BASE_DIR, "FRONTEND")
 
 SOM_SCRIPT = os.path.join(ALGO_DIR, "SOM.py")
 
@@ -111,7 +112,7 @@ def build_react():
         log("📦 node_modules não encontrado. Rodando npm install...")
 
         result = subprocess.run(
-            ["npm", "install"],
+            ["npm.cmd", "install"],
             cwd=REACT_DIR
         )
 
@@ -122,7 +123,7 @@ def build_react():
     log("⚙️ Gerando build de produção do React...")
 
     result = subprocess.run(
-        ["npm", "run", "build"],
+        ["npm.cmd", "run", "build"],
         cwd=REACT_DIR
     )
 
@@ -136,7 +137,7 @@ def build_react():
         log("❌ Build terminou, mas a pasta dist não foi encontrada.")
         return False
 
-    log("✅ Build de produção gerado em REACT/frontend/dist.")
+    log("✅ Build de produção gerado em FRONTEND/dist.")
     return True
 
 
@@ -204,7 +205,7 @@ def main():
     if ok:
         fastapi_proc = res
         log("✅ FastAPI iniciado.")
-        log("🌐 Acesse: http://192.168.0.6:8000")
+        log("🌐 Acesse: http://localhost:8000")
     else:
         log(f"⚠️ FastAPI falhou: {res}")
 
@@ -212,6 +213,7 @@ def main():
 
     if processo_esta_vivo(fastapi_proc):
         log("✅ FastAPI está vivo.")
+        subprocess.Popen(['cmd', '/c', 'start', 'http://localhost:8000'], shell=False)
     else:
         log("⚠️ FastAPI parece offline.")
 

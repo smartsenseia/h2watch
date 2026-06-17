@@ -62,9 +62,9 @@ APP_DIR = Path(__file__).resolve().parent
 FASTAPI_DIR = APP_DIR.parent
 PROJECT_DIR = FASTAPI_DIR.parent
 
-FRONTEND_DIST = PROJECT_DIR / "REACT" / "frontend" / "dist"
+FRONTEND_DIST   = PROJECT_DIR.parent / "FRONTEND" / "dist"
 FRONTEND_ASSETS = FRONTEND_DIST / "assets"
-INDEX_HTML = FRONTEND_DIST / "index.html"
+INDEX_HTML      = FRONTEND_DIST / "index.html"
 
 print(f"🔎 Procurando React build em: {FRONTEND_DIST}")
 

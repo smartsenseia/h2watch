@@ -1,28 +1,28 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --font-size: 13px;
+  --font-size: 15px;
   --background: #090c11;
-  --foreground: #d8e0ec;
+  --foreground: #e2eaf6;
   --card: #0d1118;
-  --card-foreground: #d8e0ec;
+  --card-foreground: #e2eaf6;
   --popover: #111722;
-  --popover-foreground: #d8e0ec;
+  --popover-foreground: #e2eaf6;
   --primary: #00c8a8;
   --primary-foreground: #090c11;
   --secondary: #141b26;
-  --secondary-foreground: #a8b8cc;
+  --secondary-foreground: #c4d4e8;
   --muted: #111722;
-  --muted-foreground: #5a6a80;
+  --muted-foreground: #7a8fa8;
   --accent: #f59e0b;
   --accent-foreground: #090c11;
   --destructive: #ef4444;
   --destructive-foreground: #fff;
-  --border: #1c2535;
+  --border: #243044;
   --input: #111722;
   --input-background: #111722;
   --switch-background: #2a3547;
-  --font-weight-medium: 500;
+  --font-weight-medium: 600;
   --font-weight-normal: 400;
   --ring: #00c8a8;
   --chart-1: #00c8a8;
@@ -30,14 +30,14 @@
   --chart-3: #818cf8;
   --chart-4: #fb7185;
   --chart-5: #34d399;
-  --radius: 0.25rem;
+  --radius: 0.375rem;
   --sidebar: #0d1118;
-  --sidebar-foreground: #d8e0ec;
+  --sidebar-foreground: #e2eaf6;
   --sidebar-primary: #00c8a8;
   --sidebar-primary-foreground: #090c11;
   --sidebar-accent: #141b26;
-  --sidebar-accent-foreground: #d8e0ec;
-  --sidebar-border: #1c2535;
+  --sidebar-accent-foreground: #e2eaf6;
+  --sidebar-border: #243044;
   --sidebar-ring: #00c8a8;
 }
 
@@ -61,7 +61,7 @@
   --border: oklch(0.269 0 0);
   --input: oklch(0.269 0 0);
   --ring: oklch(0.439 0 0);
-  --font-weight-medium: 500;
+  --font-weight-medium: 600;
   --font-weight-normal: 400;
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
@@ -126,12 +126,9 @@
 
   body {
     @apply bg-background text-foreground;
+    letter-spacing: 0.01em;
+    line-height: 1.6;
   }
-
-  /**
-  * Default typography styles for HTML elements (h1-h4, p, label, button, input).
-  * These are in @layer base, so Tailwind utility classes (like text-sm, text-lg) automatically override them.
-  */
 
   html {
     font-size: var(--font-size);
@@ -140,25 +137,26 @@
   h1 {
     font-size: var(--text-2xl);
     font-weight: var(--font-weight-medium);
-    line-height: 1.5;
+    line-height: 1.4;
+    letter-spacing: -0.01em;
   }
 
   h2 {
     font-size: var(--text-xl);
     font-weight: var(--font-weight-medium);
-    line-height: 1.5;
+    line-height: 1.4;
   }
 
   h3 {
     font-size: var(--text-lg);
     font-weight: var(--font-weight-medium);
-    line-height: 1.5;
+    line-height: 1.4;
   }
 
   h4 {
     font-size: var(--text-base);
     font-weight: var(--font-weight-medium);
-    line-height: 1.5;
+    line-height: 1.4;
   }
 
   label {
@@ -171,6 +169,7 @@
     font-size: var(--text-base);
     font-weight: var(--font-weight-medium);
     line-height: 1.5;
+    letter-spacing: 0.02em;
   }
 
   input {
