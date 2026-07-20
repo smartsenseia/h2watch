@@ -1,14 +1,7 @@
-origincert: /home/pi/.cloudflared/cert.pem
-
-tunnel: 8ef9a67c-f76e-45ea-8ef3-3b84d86679b3
-
-credentials-file: /home/pi/.cloudflared/8ef9a67c-f76e-45ea-8ef3-3b84d86679b3.json
+tunnel: fc3e6a35-7ef9-49c4-9670-48f2f18d1aa9
 
 ingress:
-  - hostname: dashboard.smartsenseiatrl6.org
-    service: http://127.0.0.1:8000
-
-  - hostname: api.smartsenseiatrl6.org
-    service: http://127.0.0.1:8000
+  - hostname: smartsenseiah2watch.org
+    service: http://localhost:8000
 
   - service: http_status:404

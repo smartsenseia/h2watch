@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 import os
 import sys
@@ -13,7 +14,7 @@ from typing import Optional
 # ==========================================================
 
 ASSET_ID = os.environ.get("ASSET_ID", "MD01BR01")
-LOOP_SECONDS = float(os.environ.get("LOOP_SECONDS", "1.0"))
+LOOP_SECONDS = float(os.environ.get("LOOP_SECONDS", "3.0"))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 ALGO_DIR    = os.path.join(BASE_DIR, "ALGORITHMS_AND_DATA")
@@ -22,10 +23,15 @@ REACT_DIR   = os.path.join(BASE_DIR, "FRONTEND")
 
 SOM_SCRIPT = os.path.join(ALGO_DIR, "SOM.py")
 
+CLOUDFLARED_EXE    = r"C:\cloudflared\cloudflared.exe"
+CLOUDFLARED_CONFIG = os.path.join(BASE_DIR, "cloudflared_config.yml")
+
+CLP_IP        = "192.168.0.35"
+ETHERNET_IP   = "192.168.0.36"
+
 sys.path.append(ALGO_DIR)
 
 from ALGORITHMS_AND_DATA.connection import enviar_dados_clp
-
 
 # ==========================================================
 # SOM
@@ -37,7 +43,6 @@ SOM_ENV = {
     "SOM_REFRESH_SECONDS": "1.0",
     "SOM_ARTIFACT_DIR": os.path.join(ALGO_DIR, "MODEL"),
 }
-
 
 # ==========================================================
 # Utils
@@ -57,6 +62,27 @@ def safe_call(fn, *args, **kwargs):
 def processo_esta_vivo(proc: Optional[subprocess.Popen]) -> bool:
     return proc is not None and proc.poll() is None
 
+# ==========================================================
+# Rota estática CLP
+# ==========================================================
+
+def fixar_rota_clp():
+    """Garante que o tráfego para o CLP sempre sai pela Ethernet."""
+    try:
+        subprocess.run(
+            f"route delete {CLP_IP}",
+            shell=True, capture_output=True
+        )
+        result = subprocess.run(
+            f"route add {CLP_IP} mask 255.255.255.255 {ETHERNET_IP} metric 1",
+            shell=True, capture_output=True
+        )
+        if result.returncode == 0:
+            log(f"✅ Rota CLP fixada: {CLP_IP} → Ethernet ({ETHERNET_IP})")
+        else:
+            log(f"⚠️ Falha ao fixar rota CLP: {result.stderr.decode(errors='ignore')}")
+    except Exception as e:
+        log(f"⚠️ Erro ao fixar rota: {e}")
 
 # ==========================================================
 # Kill portas
@@ -92,7 +118,6 @@ def matar_processos_portas(*portas: int):
 
         except subprocess.CalledProcessError:
             log(f"⚠️ Nenhum processo na porta {porta}.")
-
 
 # ==========================================================
 # React produção
@@ -140,7 +165,6 @@ def build_react():
     log("✅ Build de produção gerado em FRONTEND/dist.")
     return True
 
-
 # ==========================================================
 # FastAPI
 # ==========================================================
@@ -162,6 +186,29 @@ def iniciar_fastapi():
         shell=False,
     )
 
+# ==========================================================
+# Cloudflare Tunnel
+# ==========================================================
+
+def iniciar_cloudflared():
+
+    if not os.path.exists(CLOUDFLARED_EXE):
+        log(f"❌ cloudflared.exe não encontrado em: {CLOUDFLARED_EXE}")
+        return None
+
+    if not os.path.exists(CLOUDFLARED_CONFIG):
+        log(f"❌ config.yml não encontrado em: {CLOUDFLARED_CONFIG}")
+        return None
+
+    return subprocess.Popen(
+        [
+            CLOUDFLARED_EXE,
+            "tunnel",
+            "--config", CLOUDFLARED_CONFIG,
+            "run",
+        ],
+        shell=False,
+    )
 
 # ==========================================================
 # SOM
@@ -177,12 +224,14 @@ def iniciar_som_service():
         env=env
     )
 
-
 # ==========================================================
 # Main
 # ==========================================================
 
 def main():
+
+    # Fixa rota do CLP antes de qualquer coisa
+    fixar_rota_clp()
 
     matar_processos_portas(8000)
 
@@ -205,7 +254,8 @@ def main():
     if ok:
         fastapi_proc = res
         log("✅ FastAPI iniciado.")
-        log("🌐 Acesse: http://localhost:8000")
+        log("🌐 Local:  http://localhost:8000")
+        log("🌐 Nuvem:  https://smartsenseiah2watch.org")
     else:
         log(f"⚠️ FastAPI falhou: {res}")
 
@@ -216,6 +266,21 @@ def main():
         subprocess.Popen(['cmd', '/c', 'start', 'http://localhost:8000'], shell=False)
     else:
         log("⚠️ FastAPI parece offline.")
+
+    # ------------------------------------------------------
+    # Cloudflare Tunnel
+    # ------------------------------------------------------
+
+    cloudflared_proc = None
+
+    ok, res = safe_call(iniciar_cloudflared)
+
+    if ok and res is not None:
+        cloudflared_proc = res
+        log("✅ Cloudflare tunnel iniciado.")
+        log("🌐 Acesse externamente: https://smartsenseiah2watch.org")
+    else:
+        log(f"⚠️ Cloudflare tunnel falhou: {res}")
 
     # ------------------------------------------------------
     # SOM
@@ -234,12 +299,18 @@ def main():
     log(f"📡 Sistema ativo | asset={ASSET_ID} | loop={LOOP_SECONDS}s")
 
     # ------------------------------------------------------
-    # Loop principal
+    # Loop principal — refixar rota periodicamente
     # ------------------------------------------------------
 
     try:
 
+        ciclo = 0
+
         while True:
+
+            # Refixar rota a cada 60 ciclos (~60s) para garantir
+            if ciclo % 60 == 0:
+                fixar_rota_clp()
 
             ok_read, res = safe_call(enviar_dados_clp)
 
@@ -248,6 +319,7 @@ def main():
             else:
                 log("✅ Dados PLC enviados para API")
 
+            ciclo += 1
             time.sleep(LOOP_SECONDS)
 
     except KeyboardInterrupt:
@@ -256,7 +328,7 @@ def main():
 
     finally:
 
-        for proc in (som_proc, fastapi_proc):
+        for proc in (som_proc, cloudflared_proc, fastapi_proc):
 
             try:
                 if proc and proc.poll() is None:

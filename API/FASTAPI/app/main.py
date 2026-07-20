@@ -23,8 +23,8 @@ origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://192.168.0.6:5173",
-    "https://dashboard.smartsenseiatrl6.org",
-    "https://api.smartsenseiatrl6.org",
+    "https://smartsenseiah2watch.org",        # ← novo
+    "https://www.smartsenseiah2watch.org",    # ← novo
 ]
 
 app.add_middleware(

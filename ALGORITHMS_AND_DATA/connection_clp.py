@@ -1,202 +1,176 @@
-# -*- coding: utf-8 -*-
-"""
-connection_clp.py — Leitura de dados do CLP ABB via Modbus TCP
-
-Diferença em relação ao Siemens/snap7:
-  - Siemens: valores Int 16-bit raw (0–27648) → precisavam de norm() + scale()
-  - ABB Modbus: valores Float 32-bit já em unidade de engenharia → leitura direta
-
-Preencha REGISTRADORES com os endereços descobertos pelo scanner_modbus.py.
-"""
-
-import struct
+# connection_clp.py — mapeamento definitivo ABB Modbus TCP
+import struct, socket
 from pymodbus.client import ModbusTcpClient
 
-# ==========================================================
-# Config de conexão
-# ==========================================================
+CLP_IP    = "192.168.0.35"
+CLP_PORT  = 502
+SOURCE_IP = "192.168.0.36"   # força saída pela Ethernet
 
-CLP_IP   = "192.168.0.10"  # ← IP do CLP ABB (mesmo IP do Siemens antes)
-CLP_PORT = 502
-SLAVE_ID = 1
-
-# ==========================================================
-# Ranges físicos
-# (mantidos para validação — no Siemens eram usados no scale())
-# ==========================================================
-
-TEMP_MIN = 0.0
-TEMP_MAX = 150.0
-
-FLOW_MIN = 0.0
-FLOW_MAX = 100.0
-
-PI01_MIN = -1.0
-PI01_MAX = 1.0
-
-PI02_MIN = -1.0
-PI02_MAX = 1.0
-
-PI03_MIN = -1.0
-PI03_MAX = 1.0
-
-PI04_MIN = 0.0
-PI04_MAX = 3.0
-
-PI05_MIN = 0.0
-PI05_MAX = 3.0
-
-# ==========================================================
-# Mapeamento de registradores Modbus
-# Cada float 32-bit ocupa 2 registradores consecutivos
-# Preencha após rodar scanner_modbus.py
-# ==========================================================
-
-REGISTRADORES = {
-
-    # Temperaturas — mesma ordem do db_read() do Siemens
-    "TI01": 0,    # era get_int(data, 0)
-    "TI02": 2,    # era get_int(data, 2)
-    "TI03": 4,    # era get_int(data, 4)
-    "TI04": 6,    # era get_int(data, 6)
-    "TI05": 8,    # era get_int(data, 8)
-    "TI06": 10,   # era get_int(data, 10)
-    "TI07": 12,   # era get_int(data, 12)
-    "TI08": 14,   # era get_int(data, 14)
-    "TI09": 16,   # era get_int(data, 16)
-    "TI10": 18,   # era get_int(data, 18)
-    "TI_A": 20,   # era get_int(data, 20)
-    "TI_B": 22,   # era get_int(data, 22)
-    "TI11": 24,   # era get_int(data, 42)
-
-    # Vazões
-    "FI01": 30,   # era get_int(data, 24)
-    "FI02": 32,   # era get_int(data, 26)
-    "FI03": 34,   # era get_int(data, 28)
-    "FI04": 36,   # era get_int(data, 30)
-
-    # Pressões
-    "PI01": 40,   # era get_int(data, 32)
-    "PI02": 42,   # era get_int(data, 34)
-    "PI03": 44,   # era get_int(data, 36)
-    "PI04": 46,   # era get_int(data, 38)
-    "PI05": 48,   # era get_int(data, 44)
-
-    # Válvula
-    "VALVULA": 50,  # era get_int(data, 40)
-}
-
-# ==========================================================
+# =============================================================
 # Helpers
-# ==========================================================
+# =============================================================
 
-def _regs_to_float(r1: int, r2: int) -> float:
-    """
-    Converte 2 registradores Modbus (16-bit cada) em float 32-bit.
-    Big-endian é o padrão Modbus. Se os valores saírem errados,
-    troque para: struct.pack('<HH', r2, r1)
-    """
-    raw = struct.pack(">HH", r1, r2)
-    return round(struct.unpack(">f", raw)[0], 4)
+def _f32_le(r1, r2):
+    """Float 32-bit Little-Endian — temperaturas reg 1008/1010"""
+    return round(struct.unpack("<f", struct.pack("<HH", r1, r2))[0], 2)
 
+def _f32_be(r1, r2):
+    """Float 32-bit Big-Endian — pressão H2 reg 6"""
+    return round(struct.unpack(">f", struct.pack(">HH", r1, r2))[0], 2)
 
-def _ler_float(client: ModbusTcpClient, reg: int) -> float:
-    """Lê um float 32-bit a partir do registrador `reg`."""
-    resp = client.read_holding_registers(reg, count=2, slave=SLAVE_ID)
-    if resp.isError():
-        raise ConnectionError(f"Erro ao ler registrador {reg}: {resp}")
-    return _regs_to_float(*resp.registers)
+def _i16(r):
+    """Int 16-bit signed"""
+    return r if r < 32768 else r - 65536
 
+def _clamp(v, vmin, vmax):
+    return max(vmin, min(vmax, v))
 
-def _clamp(value: float, vmin: float, vmax: float) -> float:
-    """
-    Opcional: garante que o valor está dentro do range físico esperado.
-    Substitui a validação implícita que o scale() fazia no Siemens.
-    """
-    return max(vmin, min(vmax, value))
+def _port_open(timeout=2):
+    try:
+        s = socket.create_connection((CLP_IP, CLP_PORT), timeout=timeout)
+        s.close(); return True
+    except:
+        return False
 
+def _ler_bloco(client, start, count):
+    r = client.read_holding_registers(start, count=count)
+    if r and not r.isError():
+        return {start + i: r.registers[i] for i in range(len(r.registers))}
+    return {}
 
-# ==========================================================
-# Função principal — mesma assinatura do código original
-# ==========================================================
+# =============================================================
+# Mapeamento de registradores e conversões
+#
+# Reg  | Variável               | Tipo  | Conversão        | Range painel
+# -----|------------------------|-------|------------------|-------------------
+# 1008 | stack_1_temperature    | F32LE | × 4              | 22–34 °C
+# 1010 | water_temperature      | F32LE | × 4              | 20–34 °C
+# 6    | h2_pressure            | F32BE | × 1 (já em bar)  | 0–28 bar
+# 526  | aim_tank_pressure      | I16   | ÷ 100            | 25.6–30 bar
+# 506  | stack_voltage          | I16   | ÷ 10             | 42–54 V
+# 586  | stack_current          | I16   | ÷ 10             | 30–52 A
+# 580  | aim_water_volume       | I16   | ÷ 10             | 20–28 Lt
+# 582  | h2_flow                | I16   | × 1 (já NLt/h)   | 0–500 NLt/h
+# 584  | water_flow             | I16   | ÷ 10             | 4–6 Lt/m
+# 681  | a_column_temperature   | I16   | ÷ 10             | ~17 °C
+# 687  | b_column_temperature   | I16   | ÷ 10             | ~17 °C
+# 689  | water_conductivity     | I16   | ÷ 100            | 0.1–0.2 µS
+# =============================================================
 
 def ler_dados_clp() -> dict:
     """
-    Conecta ao CLP ABB via Modbus TCP e retorna os dados no mesmo
-    formato do código original (Siemens/snap7), sem nenhuma conversão
-    manual — o ABB já entrega os valores em unidade de engenharia.
+    Lê todos os sensores do CLP ABB via Modbus TCP.
+    Retorna dict com as variáveis de processo convertidas para unidades físicas.
     """
-    client = ModbusTcpClient(CLP_IP, port=CLP_PORT)
+    if not _port_open():
+        raise ConnectionError(f"CLP inacessível em {CLP_IP}:{CLP_PORT}")
 
+    client = ModbusTcpClient(
+        host=CLP_IP,
+        port=CLP_PORT,
+        timeout=5,
+        source_address=(SOURCE_IP, 0)
+    )
     if not client.connect():
-        raise ConnectionError(
-            f"Não foi possível conectar ao CLP ABB em {CLP_IP}:{CLP_PORT}"
-        )
+        raise ConnectionError(f"Falha ao conectar em {CLP_IP}:{CLP_PORT}")
 
     try:
-
-        # Temperaturas — ABB já entrega em °C (era raw/27648 * 150 no Siemens)
-        TI01 = _clamp(_ler_float(client, REGISTRADORES["TI01"]), TEMP_MIN, TEMP_MAX)
-        TI02 = _clamp(_ler_float(client, REGISTRADORES["TI02"]), TEMP_MIN, TEMP_MAX)
-        TI03 = _clamp(_ler_float(client, REGISTRADORES["TI03"]), TEMP_MIN, TEMP_MAX)
-        TI04 = _clamp(_ler_float(client, REGISTRADORES["TI04"]), TEMP_MIN, TEMP_MAX)
-        TI05 = _clamp(_ler_float(client, REGISTRADORES["TI05"]), TEMP_MIN, TEMP_MAX)
-        TI06 = _clamp(_ler_float(client, REGISTRADORES["TI06"]), TEMP_MIN, TEMP_MAX)
-        TI07 = _clamp(_ler_float(client, REGISTRADORES["TI07"]), TEMP_MIN, TEMP_MAX)
-        TI08 = _clamp(_ler_float(client, REGISTRADORES["TI08"]), TEMP_MIN, TEMP_MAX)
-        TI09 = _clamp(_ler_float(client, REGISTRADORES["TI09"]), TEMP_MIN, TEMP_MAX)
-        TI10 = _clamp(_ler_float(client, REGISTRADORES["TI10"]), TEMP_MIN, TEMP_MAX)
-        TI_A = _clamp(_ler_float(client, REGISTRADORES["TI_A"]), TEMP_MIN, TEMP_MAX)
-        TI_B = _clamp(_ler_float(client, REGISTRADORES["TI_B"]), TEMP_MIN, TEMP_MAX)
-        TI11 = _clamp(_ler_float(client, REGISTRADORES["TI11"]), TEMP_MIN, TEMP_MAX)
-
-        # Vazões — ABB já entrega em unidade de engenharia (era raw/27648 * 100)
-        FI01 = _clamp(_ler_float(client, REGISTRADORES["FI01"]), FLOW_MIN, FLOW_MAX)
-        FI02 = _clamp(_ler_float(client, REGISTRADORES["FI02"]), FLOW_MIN, FLOW_MAX)
-        FI03 = _clamp(_ler_float(client, REGISTRADORES["FI03"]), FLOW_MIN, FLOW_MAX)
-        FI04 = _clamp(_ler_float(client, REGISTRADORES["FI04"]), FLOW_MIN, FLOW_MAX)
-
-        # Pressões — ABB já entrega em bar/kPa
-        PI01 = _clamp(_ler_float(client, REGISTRADORES["PI01"]), PI01_MIN, PI01_MAX)
-        PI02 = _clamp(_ler_float(client, REGISTRADORES["PI02"]), PI02_MIN, PI02_MAX)
-        PI03 = _clamp(_ler_float(client, REGISTRADORES["PI03"]), PI03_MIN, PI03_MAX)
-        PI04 = _clamp(_ler_float(client, REGISTRADORES["PI04"]), PI04_MIN, PI04_MAX)
-        PI05 = _clamp(_ler_float(client, REGISTRADORES["PI05"]), PI05_MIN, PI05_MAX)
-
-        # Válvula — ABB já entrega em % (era raw/27648 * 100 no Siemens)
-        VALVULA = _clamp(_ler_float(client, REGISTRADORES["VALVULA"]), 0.0, 100.0)
-
+        d = {}
+        d.update(_ler_bloco(client, 0,    30))    # reg 0–29   → h2_pressure (F32BE, reg 6)
+        d.update(_ler_bloco(client, 500,  100))   # reg 500–599 → voltage, current, volume, flow
+        d.update(_ler_bloco(client, 678,  16))    # reg 678–693 → column temps, conductivity
+        d.update(_ler_bloco(client, 1006, 8))     # reg 1006–1013 → stack temp, water temp
     finally:
         client.close()
 
+    # ----------------------------------------------------------
+    # Decodificação com conversões fisicamente corretas
+    # ----------------------------------------------------------
+    def get(reg):
+        return d.get(reg, 0)
+
+    # --- Temperaturas — F32LE × 4 (float bruto ~5–8 → × 4 = °C) ---
+    stack_1_temperature = _clamp(_f32_le(get(1008), get(1009)) * 4, 0, 100)
+    water_temperature   = _clamp(_f32_le(get(1010), get(1011)) * 4, 0, 100)
+
+    # --- Temperaturas colunas TSA — I16 ÷ 10 (bruto ~170 → ÷10 = 17 °C) ---
+    a_column_temperature = _clamp(_i16(get(681)) / 10, -50, 200)
+    b_column_temperature = _clamp(_i16(get(687)) / 10, -50, 200)
+
+    # --- Pressões ---
+    # H2 outlet: F32BE já entrega o valor em bar diretamente (remover ×4000 anterior)
+    h2_pressure      = _clamp(_f32_be(get(6), get(7)),         0, 50)
+
+    # Tank pressure: I16 ÷ 100 (bruto ~2560–3030 → ÷100 = 25.6–30.3 bar)
+    aim_tank_pressure = _clamp(_i16(get(526)) / 100,           0, 50)
+
+    # --- Elétricos ---
+    # Bruto 300–550 (×10 do valor real) → ÷ 10
+    stack_voltage = _clamp(_i16(get(506)) / 10, 0, 100)
+    stack_current = _clamp(_i16(get(586)) / 10, 0, 100)
+
+    # --- Fluxos e volumes ---
+    # H2 flow: I16 já em NLt/h diretamente (bruto 0–500)
+    h2_flow = _clamp(_i16(get(582)), 0, 2500)
+
+    # Water flow: I16 ÷ 10 (bruto ~40–60 → ÷10 = 4.0–6.0 Lt/m)
+    # ATENÇÃO: registrador 584 a confirmar — ajuste se scanner indicar outro reg
+    water_flow = _clamp(_i16(get(584)) / 10, 0, 20)
+
+    # Water tank volume: I16 ÷ 10 (bruto ~200–280 → ÷10 = 20–28 Lt)
+    aim_water_volume = _clamp(_i16(get(580)) / 10, 0, 200)
+
+    # --- Condutividade ---
+    # I16 ÷ 100 (bruto ~10–22 → ÷100 = 0.10–0.22 µS)
+    water_conductivity = _clamp(_i16(get(689)) / 100, 0, 20)
+
+    # --- Não mapeados com certeza — retornam 0 até confirmar ---
+    aim_stack_current_2 = 0
+    aim_stack_voltage_2 = 0
+    stack_2_temperature = 0
+
     return {
-        "temperaturas": {
-            "TI01": TI01,
-            "TI02": TI02,
-            "TI03": TI03,
-            "TI04": TI04,
-            "TI05": TI05,
-            "TI06": TI06,
-            "TI07": TI07,
-            "TI08": TI08,
-            "TI09": TI09,
-            "TI10": TI10,
-            "TI_A": TI_A,
-            "TI_B": TI_B,
-            "TI11": TI11,
-        },
-        "pressoes": {
-            "PI01": PI01,
-            "PI02": PI02,
-            "PI03": PI03,
-            "PI04": PI04,
-            "PI05": PI05,
-        },
-        "vazoes": {
-            "FI01": FI01,
-            "FI02": FI02,
-            "FI03": FI03,
-            "FI04": FI04,
-        },
-        "valvula": VALVULA,
+        "stack_1_temperature":  stack_1_temperature,   # °C
+        "stack_2_temperature":  stack_2_temperature,   # °C  (inativo)
+        "water_temperature":    water_temperature,     # °C
+        "a_column_temperature": a_column_temperature,  # °C
+        "b_column_temperature": b_column_temperature,  # °C
+        "h2_pressure":          h2_pressure,           # bar
+        "aim_tank_pressure":    aim_tank_pressure,     # bar
+        "stack_voltage":        stack_voltage,         # V
+        "stack_current":        stack_current,         # A
+        "aim_stack_current_2":  aim_stack_current_2,   # A   (inativo)
+        "aim_stack_voltage_2":  aim_stack_voltage_2,   # V   (inativo)
+        "h2_flow":              h2_flow,               # NLt/h
+        "water_flow":           water_flow,            # Lt/m
+        "aim_water_volume":     aim_water_volume,      # Lt
+        "water_conductivity":   water_conductivity,    # µS
     }
+
+# =============================================================
+# Teste rápido
+# =============================================================
+if __name__ == "__main__":
+    print("Testando leitura...\n")
+    dados = ler_dados_clp()
+    units = {
+        "stack_1_temperature":  "°C",
+        "stack_2_temperature":  "°C",
+        "water_temperature":    "°C",
+        "a_column_temperature": "°C",
+        "b_column_temperature": "°C",
+        "h2_pressure":          "bar",
+        "aim_tank_pressure":    "bar",
+        "stack_voltage":        "V",
+        "stack_current":        "A",
+        "aim_stack_current_2":  "A",
+        "aim_stack_voltage_2":  "V",
+        "h2_flow":              "NLt/h",
+        "water_flow":           "Lt/m",
+        "aim_water_volume":     "Lt",
+        "water_conductivity":   "µS",
+    }
+    print(f"{'Variável':<25} {'Valor':>10}  {'Unidade'}")
+    print("-" * 45)
+    for k, v in dados.items():
+        print(f"{k:<25} {v:>10.2f}  {units.get(k, '')}")

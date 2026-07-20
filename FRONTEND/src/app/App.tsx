@@ -1,651 +1,305 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
-  ResponsiveContainer, Tooltip, ReferenceLine, AreaChart, Area,
+  ResponsiveContainer, Tooltip, AreaChart, Area,
 } from "recharts";
 import {
-  Activity, Play, Square, Zap, Thermometer, Droplets,
-  Wind, AlertTriangle, CheckCircle, Settings, Download,
-  ChevronRight, Gauge, FlaskConical, BarChart2, Layers,
+  Activity, Zap, Thermometer, Droplets, Wind,
+  AlertTriangle, CheckCircle, Gauge, FlaskConical,
+  BarChart2, Layers, Download,
 } from "lucide-react";
- 
-// ─── Types ────────────────────────────────────────────────────────────────────
- 
-type ChGroup = "electrical" | "thermal" | "flow" | "quality";
- 
-interface Channel {
-  id: string;
-  label: string;
-  unit: string;
-  group: ChGroup;
-  color: string;
-  nominalMin: number;
-  nominalMax: number;
-  alarmLow?: number;
-  alarmHigh?: number;
-  baseValue: number;
-  noise: number;
-  drift: number;
-  enabled: boolean;
-}
- 
-interface DataPoint {
-  t: number;
-  [key: string]: number | undefined;
-}
- 
-type Status = "STANDBY" | "RUNNING" | "WARNING" | "FAULT";
- 
-// ─── Channel Definitions ──────────────────────────────────────────────────────
- 
-const CHANNELS: Channel[] = [
-  {
-    id: "VStack", label: "Tensão do Stack", unit: "V",
-    group: "electrical", color: "#00c8a8",
-    nominalMin: 58, nominalMax: 78, alarmLow: 55, alarmHigh: 82,
-    baseValue: 68.4, noise: 0.18, drift: 0.05, enabled: true,
-  },
-  {
-    id: "IStack", label: "Corrente do Stack", unit: "A",
-    group: "electrical", color: "#22d3ee",
-    nominalMin: 0, nominalMax: 500, alarmHigh: 510,
-    baseValue: 312, noise: 1.8, drift: 0.3, enabled: true,
-  },
-  {
-    id: "PWR", label: "Potência Consumida", unit: "kW",
-    group: "electrical", color: "#818cf8",
-    nominalMin: 0, nominalMax: 40, alarmHigh: 42,
-    baseValue: 21.4, noise: 0.12, drift: 0.02, enabled: true,
-  },
-  {
-    id: "EnerSpec", label: "Energia Específica", unit: "kWh/Nm³",
-    group: "electrical", color: "#a78bfa",
-    nominalMin: 4.0, nominalMax: 6.5, alarmHigh: 7.0,
-    baseValue: 4.82, noise: 0.03, drift: 0.005, enabled: false,
-  },
-  {
-    id: "TStack", label: "Temp. Stack", unit: "°C",
-    group: "thermal", color: "#f59e0b",
-    nominalMin: 55, nominalMax: 85, alarmHigh: 90,
-    baseValue: 72.5, noise: 0.25, drift: 0.04, enabled: true,
-  },
-  {
-    id: "TAnode", label: "Temp. Ânodo", unit: "°C",
-    group: "thermal", color: "#fb923c",
-    nominalMin: 50, nominalMax: 82, alarmHigh: 88,
-    baseValue: 70.1, noise: 0.3, drift: 0.05, enabled: false,
-  },
-  {
-    id: "TCath", label: "Temp. Cátodo", unit: "°C",
-    group: "thermal", color: "#fbbf24",
-    nominalMin: 50, nominalMax: 82, alarmHigh: 88,
-    baseValue: 68.7, noise: 0.28, drift: 0.04, enabled: false,
-  },
-  {
-    id: "TCoolIn", label: "Refrigerante Entrada", unit: "°C",
-    group: "thermal", color: "#34d399",
-    nominalMin: 20, nominalMax: 45, alarmHigh: 48,
-    baseValue: 32.3, noise: 0.15, drift: 0.02, enabled: true,
-  },
-  {
-    id: "TCoolOut", label: "Refrigerante Saída", unit: "°C",
-    group: "thermal", color: "#6ee7b7",
-    nominalMin: 40, nominalMax: 65, alarmHigh: 70,
-    baseValue: 51.8, noise: 0.2, drift: 0.03, enabled: false,
-  },
-  {
-    id: "PSys", label: "Pressão do Sistema", unit: "bar",
-    group: "flow", color: "#60a5fa",
-    nominalMin: 1, nominalMax: 30, alarmLow: 0.8, alarmHigh: 32,
-    baseValue: 15.2, noise: 0.08, drift: 0.01, enabled: true,
-  },
-  {
-    id: "DeltaP", label: "Pressão Diferencial", unit: "mbar",
-    group: "flow", color: "#93c5fd",
-    nominalMin: 0, nominalMax: 80, alarmHigh: 100,
-    baseValue: 18.6, noise: 0.5, drift: 0.05, enabled: false,
-  },
-  {
-    id: "FlowH2O", label: "Fluxo de Água", unit: "L/min",
-    group: "flow", color: "#38bdf8",
-    nominalMin: 0, nominalMax: 12, alarmLow: 0.5, alarmHigh: 13,
-    baseValue: 6.4, noise: 0.08, drift: 0.01, enabled: true,
-  },
-  {
-    id: "FlowH2", label: "Vazão H₂", unit: "Nm³/h",
-    group: "flow", color: "#7dd3fc",
-    nominalMin: 0, nominalMax: 5, alarmHigh: 5.5,
-    baseValue: 2.18, noise: 0.04, drift: 0.006, enabled: true,
-  },
-  {
-    id: "H2Purity", label: "Pureza do H₂", unit: "%",
-    group: "quality", color: "#4ade80",
-    nominalMin: 99.0, nominalMax: 100, alarmLow: 99.0,
-    baseValue: 99.87, noise: 0.015, drift: 0.002, enabled: true,
-  },
-  {
-    id: "H2Prod", label: "Produção Acumulada", unit: "g/h",
-    group: "quality", color: "#86efac",
-    nominalMin: 0, nominalMax: 400,
-    baseValue: 196, noise: 2.0, drift: 0.5, enabled: true,
-  },
+
+const API = window.location.origin + "/api/v1/endpoints/";
+const MAX_PTS = 60;
+const POLL_MS = 1500;
+
+const CHANNELS = [
+  { id: "vazao_1",   label: "Stack Voltage",  unit: "V",      group: "electrical", color: "#378ADD", min: 0, max: 600  },
+  { id: "vazao_2",   label: "Stack Current",  unit: "A",      group: "electrical", color: "#1D9E75", min: 0, max: 500  },
+  { id: "temp_1",    label: "Stack 1 Temp",   unit: "°C",     group: "thermal",    color: "#EF9F27", min: 0, max: 100  },
+  { id: "temp_3",    label: "Water Temp",     unit: "°C",     group: "thermal",    color: "#F0997B", min: 0, max: 60   },
+  { id: "temp_4",    label: "Col. A Temp",    unit: "°C",     group: "thermal",    color: "#FAC775", min: 0, max: 60   },
+  { id: "temp_5",    label: "Col. B Temp",    unit: "°C",     group: "thermal",    color: "#F5C4B3", min: 0, max: 60   },
+  { id: "pressao_1", label: "H₂ Pressure",   unit: "mbar",   group: "pressure",   color: "#EF9F27", min: 0, max: 4000 },
+  { id: "pressao_2", label: "Tank Pressure",  unit: "mbar",   group: "pressure",   color: "#7F77DD", min: 0, max: 4000 },
+  { id: "vazao_3",   label: "H₂ Flow",       unit: "L/min",  group: "flow",       color: "#5DCAA5", min: 0, max: 600  },
+  { id: "vazao_4",   label: "Water Volume",   unit: "L",      group: "flow",       color: "#85B7EB", min: 0, max: 600  },
+  { id: "valvula",   label: "Conductivity",   unit: "µS/cm",  group: "flow",       color: "#9FE1CB", min: 0, max: 30   },
 ];
- 
-const GROUP_META: Record<ChGroup, { label: string; icon: React.ReactNode; color: string }> = {
-  electrical: { label: "Elétrico",  icon: <Zap size={13} />,          color: "#00c8a8" },
-  thermal:    { label: "Térmico",   icon: <Thermometer size={13} />,   color: "#f59e0b" },
-  flow:       { label: "Fluxo",     icon: <Droplets size={13} />,      color: "#60a5fa" },
-  quality:    { label: "Qualidade", icon: <FlaskConical size={13} />,  color: "#4ade80" },
+
+const GROUP_META = {
+  electrical: { label: "Elétrico",  icon: <Zap size={12} /> },
+  thermal:    { label: "Térmico",   icon: <Thermometer size={12} /> },
+  pressure:   { label: "Pressão",   icon: <Gauge size={12} /> },
+  flow:       { label: "Fluxo",     icon: <Droplets size={12} /> },
 };
- 
-const BUFFER  = 300;
-const TICK_MS = 200;
- 
-// ─── Signal Simulation ────────────────────────────────────────────────────────
- 
-function genSample(ch: Channel, t: number, phase: number): number {
-  const slow = Math.sin(2 * Math.PI * 0.02 * t + phase) * ch.drift;
-  const fast = (Math.random() - 0.5) * 2 * ch.noise;
-  return ch.baseValue + slow + fast;
-}
- 
-function fmt(v: number, decimals = 2) { return v.toFixed(decimals); }
- 
-function isAlarm(ch: Channel, v: number | undefined): boolean {
-  if (v === undefined) return false;
-  if (ch.alarmLow  !== undefined && v < ch.alarmLow)  return true;
-  if (ch.alarmHigh !== undefined && v > ch.alarmHigh) return true;
-  return false;
-}
- 
-// ─── Custom Tooltip ───────────────────────────────────────────────────────────
- 
-function ChartTooltip({ active, payload, label }: any) {
+
+const KPI_CHANNELS = [
+  { id: "vazao_1",   label: "Stack Voltage",  unit: "V",    color: "#378ADD", max: 600  },
+  { id: "vazao_2",   label: "Stack Current",  unit: "A",    color: "#1D9E75", max: 500  },
+  { id: "pressao_1", label: "H₂ Pressure",   unit: "mbar", color: "#EF9F27", max: 4000 },
+  { id: "pressao_2", label: "Tank Pressure",  unit: "mbar", color: "#7F77DD", max: 4000 },
+  { id: "vazao_3",   label: "H₂ Flow",       unit: "L/min",color: "#5DCAA5", max: 600  },
+];
+
+function pct(v, max) { return Math.min(100, Math.max(0, (v / max) * 100)); }
+function fmt(v, dec = 1) { return v == null ? "—" : Number(v).toFixed(dec); }
+
+function CustomTooltip({ active, payload }) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="border px-3 py-2" style={{ background: "#0d1118", borderColor: "#1c2535", fontFamily: "JetBrains Mono, monospace", fontSize: 12 }}>
-      <div className="mb-1.5" style={{ color: "#3d5065" }}>{Number(label).toFixed(1)} s</div>
-      {payload.map((p: any) => (
-        <div key={p.dataKey} className="flex gap-4 justify-between">
-          <span style={{ color: p.color }}>{p.dataKey}</span>
-          <span style={{ color: "#d8e0ec" }}>{Number(p.value).toFixed(3)}</span>
+    <div style={{ background: "#0d1118", border: "0.5px solid #1c2535", padding: "8px 12px", fontFamily: "monospace", fontSize: 12 }}>
+      {payload.map(p => (
+        <div key={p.dataKey} style={{ display: "flex", gap: 16, justifyContent: "space-between" }}>
+          <span style={{ color: p.color }}>{p.name}</span>
+          <span style={{ color: "#d8e0ec" }}>{Number(p.value).toFixed(2)}</span>
         </div>
       ))}
     </div>
   );
 }
- 
-// ─── KPI Card ─────────────────────────────────────────────────────────────────
- 
-function KpiCard({ ch, value, alarm }: { ch: Channel; value: number | undefined; alarm: boolean }) {
-  const v   = value ?? ch.baseValue;
-  const pct = Math.max(0, Math.min(100, ((v - ch.nominalMin) / (ch.nominalMax - ch.nominalMin)) * 100));
+
+function KpiCard({ ch, value }) {
+  const v = value ?? 0;
   return (
-    <div className="flex flex-col gap-1 px-4 py-3 border-r" style={{ borderColor: "#1c2535", minWidth: 130 }}>
-      <div className="flex items-center gap-1" style={{ color: alarm ? "#ef4444" : "#5a6a80", fontFamily: "Barlow Condensed, sans-serif", fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase" }}>
-        {alarm && <AlertTriangle size={10} />}
+    <div style={{ flex: 1, padding: "10px 14px", borderRight: "0.5px solid #1c2535", minWidth: 120 }}>
+      <div style={{ fontSize: 10, color: "#5a6a80", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 4 }}>
         {ch.label}
       </div>
-      <div className="flex items-end gap-1">
-        <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 22, fontWeight: 600, color: alarm ? "#ef4444" : ch.color, lineHeight: 1 }}>
-          {fmt(v, ch.unit === "%" ? 3 : ch.unit === "kWh/Nm³" ? 2 : 1)}
+      <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+        <span style={{ fontFamily: "monospace", fontSize: 20, fontWeight: 600, color: ch.color, lineHeight: 1 }}>
+          {fmt(v, v > 100 ? 0 : 1)}
         </span>
-        <span style={{ fontSize: 11, marginBottom: 2, color: "#5a6a80" }}>{ch.unit}</span>
+        <span style={{ fontSize: 10, color: "#5a6a80" }}>{ch.unit}</span>
       </div>
-      <div className="h-0.5 w-full" style={{ background: "#1c2535" }}>
-        <div className="h-full transition-all duration-500" style={{ width: `${pct}%`, background: alarm ? "#ef4444" : ch.color }} />
+      <div style={{ height: 2, background: "#1c2535", marginTop: 6, borderRadius: 2 }}>
+        <div style={{ height: "100%", width: `${pct(v, ch.max)}%`, background: ch.color, borderRadius: 2, transition: "width 0.5s" }} />
       </div>
     </div>
   );
 }
- 
-// ─── Channel Row ──────────────────────────────────────────────────────────────
- 
-function ChannelRow({ ch, value, alarm, selected, onToggle, onSelect }: {
-  ch: Channel; value: number | undefined; alarm: boolean;
-  selected: boolean; onToggle: () => void; onSelect: () => void;
-}) {
-  const v = value ?? ch.baseValue;
+
+function ChannelRow({ ch, value, selected, onSelect }) {
+  const v = value ?? 0;
   return (
     <div
       onClick={onSelect}
-      className="flex items-center gap-2 px-3 py-2 cursor-pointer transition-colors"
-      style={{ background: selected ? `${ch.color}12` : "transparent" }}
+      style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "7px 12px", cursor: "pointer", borderBottom: "0.5px solid #1c2535",
+        background: selected ? `${ch.color}18` : "transparent",
+        transition: "background 0.15s",
+      }}
     >
-      <button
-        onClick={(e) => { e.stopPropagation(); onToggle(); }}
-        className="shrink-0 w-3 h-3 rounded-full border transition-all"
-        style={{ background: ch.enabled ? ch.color : "transparent", borderColor: ch.enabled ? ch.color : "#3d5065" }}
-      />
-      <div className="flex-1 min-w-0">
-        <div className="truncate" style={{ fontSize: 12, color: ch.enabled ? "#a8b8cc" : "#3d5065", fontFamily: "Barlow, sans-serif" }}>
-          {ch.label}
-        </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ width: 8, height: 8, borderRadius: "50%", background: selected ? ch.color : "transparent", border: `1.5px solid ${selected ? ch.color : "#3d5065"}`, transition: "all 0.2s" }} />
+        <span style={{ fontSize: 12, color: selected ? "#a8b8cc" : "#3d5065" }}>{ch.label}</span>
       </div>
-      <div className="text-right shrink-0">
-        <span className="tabular-nums" style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 13, color: alarm ? "#ef4444" : ch.enabled ? ch.color : "#3d5065" }}>
-          {ch.enabled ? fmt(v, v > 100 ? 1 : v > 10 ? 2 : 3) : "—"}
-        </span>
-        <span style={{ fontSize: 10, marginLeft: 2, color: "#3d5065" }}>{ch.unit}</span>
-      </div>
-      {alarm && <AlertTriangle size={11} color="#ef4444" />}
+      <span style={{ fontFamily: "monospace", fontSize: 12, color: selected ? ch.color : "#3d5065" }}>
+        {fmt(v, v > 100 ? 0 : 1)} <span style={{ fontSize: 10, color: "#3d5065" }}>{ch.unit}</span>
+      </span>
     </div>
   );
 }
- 
-// ─── App ─────────────────────────────────────────────────────────────────────
- 
+
 export default function App() {
-  const [channels,    setChannels]    = useState<Channel[]>(CHANNELS);
-  const [data,        setData]        = useState<DataPoint[]>([]);
-  const [running,     setRunning]     = useState(false);
-  const [status,      setStatus]      = useState<Status>("STANDBY");
-  const [selectedIds, setSelectedIds] = useState<string[]>(["VStack", "IStack", "TStack"]);
-  const [elapsed,     setElapsed]     = useState(0);
-  const [accumulated, setAccumulated] = useState(0);
-  const [splitMode,   setSplitMode]   = useState(false);
-  const [activeGroup, setActiveGroup] = useState<ChGroup | "all">("all");
- 
-  const phaseRef   = useRef<Record<string, number>>({});
-  const tRef       = useRef(0);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const startRef   = useRef(0);
- 
-  useEffect(() => {
-    CHANNELS.forEach((ch, i) => { phaseRef.current[ch.id] = i * Math.PI * 0.618; });
-  }, []);
- 
-  const tick = useCallback(() => {
-    tRef.current += TICK_MS / 1000;
-    const t = tRef.current;
-    const point: DataPoint = { t: parseFloat(t.toFixed(2)) };
-    channels.forEach((ch) => {
-      point[ch.id] = parseFloat(genSample(ch, t, phaseRef.current[ch.id] ?? 0).toFixed(4));
-    });
-    setData((prev) => {
-      const next = [...prev, point];
-      return next.length > BUFFER ? next.slice(next.length - BUFFER) : next;
-    });
-    const flowH2 = point["FlowH2"] as number;
-    if (flowH2) setAccumulated((a) => a + (flowH2 * 89.88 * TICK_MS) / 3_600_000);
-    setElapsed(Math.floor((performance.now() - startRef.current) / 1000));
-  }, [channels]);
- 
-  useEffect(() => {
-    if (running) {
-      startRef.current = performance.now() - elapsed * 1000;
-      intervalRef.current = setInterval(tick, TICK_MS);
-      setStatus("RUNNING");
-    } else {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      if (status === "RUNNING") setStatus("STANDBY");
+  const [history, setHistory] = useState([]);
+  const [latest, setLatest] = useState(null);
+  const [selected, setSelected] = useState(new Set(["vazao_1", "vazao_2"]));
+  const [splitMode, setSplitMode] = useState(false);
+  const [status, setStatus] = useState("STANDBY");
+  const [lastId, setLastId] = useState(null);
+  const [error, setError] = useState(null);
+  const lastIdRef = useRef(null);
+
+  const fetchLatest = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}?limit=1&skip=0`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const rows = await res.json();
+      if (!rows.length) return;
+
+      const row = rows[0];
+      if (row.id === lastIdRef.current) return;
+      lastIdRef.current = row.id;
+      setLastId(row.id);
+      setLatest(row);
+      setHistory(prev => {
+        const next = [...prev, { ...row, _t: prev.length }];
+        return next.length > MAX_PTS ? next.slice(next.length - MAX_PTS) : next;
+      });
+      setStatus("LIVE");
+      setError(null);
+    } catch (e) {
+      setStatus("ERRO");
+      setError(e.message);
     }
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [running, tick]);
- 
-  const lastPoint = data[data.length - 1];
-  const alarms    = channels.filter((ch) => isAlarm(ch, lastPoint?.[ch.id] as number | undefined));
- 
-  const toggleChannel  = (id: string) =>
-    setChannels((prev) => prev.map((c) => c.id === id ? { ...c, enabled: !c.enabled } : c));
-  const toggleSelected = (id: string) =>
-    setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
- 
-  const kpiChannels    = ["FlowH2", "H2Purity", "PWR", "TStack", "PSys", "H2Prod"];
-  const visibleChannels = channels.filter((ch) => activeGroup === "all" ? true : ch.group === activeGroup);
-  const chartChannels  = channels.filter((ch) => selectedIds.includes(ch.id));
-  const xDomain        = data.length > 1 ? [data[0].t, data[data.length - 1].t] : [0, 30];
- 
-  const formatElapsed  = (s: number) =>
-    `${String(Math.floor(s / 3600)).padStart(2, "0")}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
- 
-  const statusColor: Record<Status, string> = {
-    STANDBY: "#5a6a80", RUNNING: "#00c8a8", WARNING: "#f59e0b", FAULT: "#ef4444",
-  };
- 
+  }, []);
+
+  useEffect(() => {
+    fetchLatest();
+    const id = setInterval(fetchLatest, POLL_MS);
+    return () => clearInterval(id);
+  }, [fetchLatest]);
+
+  const toggleSelected = id =>
+    setSelected(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  const chartChannels = CHANNELS.filter(ch => selected.has(ch.id));
+  const groups = ["electrical", "thermal", "pressure", "flow"];
+
+  const statusColor = status === "LIVE" ? "#1D9E75" : status === "ERRO" ? "#ef4444" : "#5a6a80";
+
   return (
-    <div className="flex flex-col h-screen overflow-hidden"
-      style={{ background: "#090c11", fontFamily: "Barlow, sans-serif", fontSize: "14px", color: "#d8e0ec" }}>
- 
-      {/* ── Top Bar ─────────────────────────────────────────────────────────── */}
-      <header className="flex items-center justify-between px-4 shrink-0 border-b"
-        style={{ height: 52, borderColor: "#1c2535", background: "#0d1118" }}>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <Wind size={18} color="#00c8a8" />
-            <span style={{ fontFamily: "Barlow Condensed, sans-serif", fontSize: 16, fontWeight: 700, color: "#d8e0ec", letterSpacing: "0.16em" }}>
-              H₂WATCH
-            </span>
-            <span className="px-1.5 py-0.5 border" style={{ fontSize: 11, color: "#00c8a8", borderColor: "#00c8a820", background: "#00c8a810", fontFamily: "JetBrains Mono, monospace" }}>
-              ELECTROLYZER DAQ
-            </span>
-          </div>
- 
-          <div className="h-5 w-px" style={{ background: "#1c2535" }} />
- 
-          <div className="flex items-center gap-1.5">
-            <button onClick={() => setRunning(true)} disabled={running}
-              className="flex items-center gap-1.5 px-3 py-1.5 font-semibold border transition-all"
-              style={{
-                fontFamily: "Barlow Condensed, sans-serif", letterSpacing: "0.08em", fontSize: 13,
-                background: running ? "#00c8a815" : "#00c8a8",
-                color: running ? "#00c8a8" : "#090c11",
-                borderColor: "#00c8a8",
-                cursor: running ? "not-allowed" : "pointer",
-              }}>
-              <Play size={13} /> {running ? "MONITORANDO" : "INICIAR"}
-            </button>
-            <button onClick={() => setRunning(false)} disabled={!running}
-              className="flex items-center gap-1.5 px-3 py-1.5 font-semibold border transition-all"
-              style={{
-                fontFamily: "Barlow Condensed, sans-serif", letterSpacing: "0.08em", fontSize: 13,
-                background: "transparent",
-                color: running ? "#ef4444" : "#3d5065",
-                borderColor: running ? "#ef4444" : "#1c2535",
-                cursor: running ? "pointer" : "not-allowed",
-              }}>
-              <Square size={13} /> PARAR
-            </button>
-            <button onClick={() => { setRunning(false); setData([]); tRef.current = 0; setElapsed(0); setAccumulated(0); }}
-              className="px-2.5 py-1.5 border transition-all"
-              style={{ fontSize: 13, color: "#5a6a80", borderColor: "#1c2535" }}>
-              RESET
-            </button>
-          </div>
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#090c11", color: "#d8e0ec", fontFamily: "sans-serif", fontSize: 14 }}>
+
+      {/* Top bar */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px", height: 52, background: "#0d1118", borderBottom: "0.5px solid #1c2535", flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <Wind size={18} color="#00c8a8" />
+          <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: "0.14em", color: "#d8e0ec" }}>H₂WATCH</span>
+          <span style={{ fontSize: 10, padding: "2px 8px", border: "0.5px solid #00c8a820", background: "#00c8a810", color: "#00c8a8", fontFamily: "monospace" }}>
+            ELECTROLYZER DAQ
+          </span>
         </div>
- 
-        <div className="flex items-center gap-4">
-          <div className="flex flex-col items-end">
-            <span style={{ fontSize: 10, letterSpacing: "0.12em", color: "#3d5065", fontFamily: "Barlow Condensed, sans-serif" }}>H₂ PRODUZIDO</span>
-            <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 15, fontWeight: 600, color: "#4ade80" }}>
-              {accumulated.toFixed(2)} g
-            </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {error && <span style={{ fontSize: 11, color: "#ef4444" }}>{error}</span>}
+          <span style={{ fontSize: 11, color: "#5a6a80", fontFamily: "monospace" }}>
+            {latest?.timestamp ? new Date(latest.timestamp).toLocaleTimeString() : "—"}
+          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 10px", border: `0.5px solid ${statusColor}40`, background: `${statusColor}10` }}>
+            <div style={{ width: 8, height: 8, borderRadius: "50%", background: statusColor, boxShadow: status === "LIVE" ? `0 0 6px ${statusColor}` : "none" }} />
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", color: statusColor }}>{status}</span>
           </div>
-          <div className="h-5 w-px" style={{ background: "#1c2535" }} />
-          <div className="flex flex-col items-end">
-            <span style={{ fontSize: 10, letterSpacing: "0.12em", color: "#3d5065", fontFamily: "Barlow Condensed, sans-serif" }}>TEMPO</span>
-            <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 15, color: running ? "#d8e0ec" : "#3d5065" }}>
-              {formatElapsed(elapsed)}
-            </span>
-          </div>
-          <div className="h-5 w-px" style={{ background: "#1c2535" }} />
-          <div className="flex items-center gap-2 px-3 py-1.5 border"
-            style={{ borderColor: `${statusColor[status]}40`, background: `${statusColor[status]}10` }}>
-            <div className="w-2 h-2 rounded-full"
-              style={{ background: statusColor[status], boxShadow: running ? `0 0 6px ${statusColor[status]}` : "none" }} />
-            <span style={{ fontFamily: "Barlow Condensed, sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: "0.14em", color: statusColor[status] }}>
-              {status}
-            </span>
-          </div>
-          {alarms.length > 0 && (
-            <div className="flex items-center gap-1.5 px-2 py-1 border"
-              style={{ borderColor: "#ef444440", background: "#ef444410", color: "#ef4444" }}>
-              <AlertTriangle size={13} />
-              <span style={{ fontFamily: "Barlow Condensed, sans-serif", fontSize: 12, letterSpacing: "0.1em" }}>
-                {alarms.length} ALARME{alarms.length > 1 ? "S" : ""}
-              </span>
-            </div>
-          )}
-          {alarms.length === 0 && running && (
-            <div className="flex items-center gap-1.5" style={{ color: "#4ade80" }}>
-              <CheckCircle size={14} />
-              <span style={{ fontFamily: "Barlow Condensed, sans-serif", fontSize: 12, letterSpacing: "0.1em" }}>NORMAL</span>
-            </div>
-          )}
-        </div>
-      </header>
- 
-      {/* ── KPI Strip ──────────────────────────────────────────────────────── */}
-      <div className="flex shrink-0 border-b overflow-x-auto" style={{ borderColor: "#1c2535", background: "#0a0e15" }}>
-        {kpiChannels.map((id) => {
-          const ch    = channels.find((c) => c.id === id)!;
-          const v     = lastPoint?.[id] as number | undefined;
-          const alarm = isAlarm(ch, v);
-          return <KpiCard key={id} ch={ch} value={v} alarm={alarm} />;
-        })}
-        <div className="flex flex-col gap-1 px-4 py-3 border-r" style={{ borderColor: "#1c2535", minWidth: 130 }}>
-          <div style={{ fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: "#5a6a80", fontFamily: "Barlow Condensed, sans-serif" }}>
-            Eficiência
-          </div>
-          <div className="flex items-end gap-1">
-            <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 22, fontWeight: 600, color: "#818cf8", lineHeight: 1 }}>
-              {lastPoint ? fmt(Math.min(100, (lastPoint["FlowH2"] as number * 2.39 / ((lastPoint["PWR"] as number) || 1)) * 100), 1) : "—"}
-            </span>
-            <span style={{ fontSize: 11, marginBottom: 2, color: "#5a6a80" }}>%</span>
-          </div>
-          <div className="h-0.5 w-full" style={{ background: "#1c2535" }}>
-            <div className="h-full" style={{ width: "68%", background: "#818cf8" }} />
-          </div>
+          {lastId && <span style={{ fontSize: 11, color: "#3d5065", fontFamily: "monospace" }}>ID {lastId}</span>}
         </div>
       </div>
- 
-      {/* ── Main Layout ────────────────────────────────────────────────────── */}
-      <div className="flex flex-1 overflow-hidden">
- 
-        {/* ── Sidebar ──────────────────────────────────────────────────────── */}
-        <aside className="flex flex-col shrink-0 border-r overflow-hidden"
-          style={{ width: 260, borderColor: "#1c2535", background: "#0d1118" }}>
- 
-          <div className="flex border-b shrink-0" style={{ borderColor: "#1c2535" }}>
-            {(["all", "electrical", "thermal", "flow", "quality"] as const).map((g) => (
-              <button key={g} onClick={() => setActiveGroup(g)}
-                className="flex-1 py-2 uppercase transition-colors"
-                style={{
-                  fontFamily: "Barlow Condensed, sans-serif", fontSize: 11, letterSpacing: "0.08em",
-                  background: activeGroup === g ? "#141b26" : "transparent",
-                  color: activeGroup === g ? (g === "all" ? "#d8e0ec" : GROUP_META[g as ChGroup].color) : "#3d5065",
-                  borderBottom: activeGroup === g
-                    ? `2px solid ${g === "all" ? "#d8e0ec" : GROUP_META[g as ChGroup].color}`
-                    : "2px solid transparent",
-                }}>
-                {g === "all" ? "ALL" : g.slice(0, 3).toUpperCase()}
-              </button>
-            ))}
-          </div>
- 
-          <div className="flex-1 overflow-y-auto">
-            {(["electrical", "thermal", "flow", "quality"] as ChGroup[]).map((grp) => {
-              const grpChannels = visibleChannels.filter((c) => c.group === grp);
-              if (!grpChannels.length) return null;
+
+      {/* KPI strip */}
+      <div style={{ display: "flex", borderBottom: "0.5px solid #1c2535", background: "#0a0e15", flexShrink: 0 }}>
+        {KPI_CHANNELS.map(ch => <KpiCard key={ch.id} ch={ch} value={latest?.[ch.id]} />)}
+      </div>
+
+      {/* Main */}
+      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+
+        {/* Sidebar */}
+        <div style={{ width: 240, borderRight: "0.5px solid #1c2535", background: "#0d1118", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <div style={{ flex: 1, overflowY: "auto" }}>
+            {groups.map(grp => {
+              const chs = CHANNELS.filter(c => c.group === grp);
               const meta = GROUP_META[grp];
               return (
                 <div key={grp}>
-                  <div className="flex items-center gap-2 px-3 py-2 border-b"
-                    style={{ borderColor: "#1c2535", background: "#090c11" }}>
-                    <span style={{ color: meta.color }}>{meta.icon}</span>
-                    <span style={{ fontFamily: "Barlow Condensed, sans-serif", fontSize: 11, letterSpacing: "0.14em", textTransform: "uppercase", color: meta.color }}>
-                      {meta.label}
-                    </span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "#5a6a80", background: "#090c11", borderBottom: "0.5px solid #1c2535" }}>
+                    {meta.icon} {meta.label}
                   </div>
-                  <div className="divide-y" style={{ borderColor: "#1c2535" }}>
-                    {grpChannels.map((ch) => {
-                      const v = lastPoint?.[ch.id] as number | undefined;
-                      return (
-                        <ChannelRow
-                          key={ch.id} ch={ch} value={v}
-                          alarm={isAlarm(ch, v)}
-                          selected={selectedIds.includes(ch.id)}
-                          onToggle={() => toggleChannel(ch.id)}
-                          onSelect={() => toggleSelected(ch.id)}
-                        />
-                      );
-                    })}
-                  </div>
+                  {chs.map(ch => (
+                    <ChannelRow
+                      key={ch.id} ch={ch}
+                      value={latest?.[ch.id]}
+                      selected={selected.has(ch.id)}
+                      onSelect={() => toggleSelected(ch.id)}
+                    />
+                  ))}
                 </div>
               );
             })}
           </div>
- 
-          <div className="border-t px-3 py-2.5 shrink-0" style={{ borderColor: "#1c2535" }}>
-            <div className="mb-2" style={{ fontSize: 11, letterSpacing: "0.08em", color: "#3d5065", fontFamily: "Barlow Condensed, sans-serif" }}>
-              {channels.filter((c) => c.enabled).length}/15 CANAIS ATIVOS · {data.length} AMOSTRAS
-            </div>
-            <div className="flex gap-2">
-              <button onClick={() => setSplitMode((v) => !v)}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 border flex-1 justify-center"
-                style={{
-                  fontFamily: "Barlow Condensed, sans-serif", letterSpacing: "0.08em", fontSize: 12,
-                  color: splitMode ? "#00c8a8" : "#5a6a80",
-                  borderColor: splitMode ? "#00c8a8" : "#1c2535",
-                }}>
-                {splitMode ? <BarChart2 size={12} /> : <Layers size={12} />}
-                {splitMode ? "SEPARADO" : "SOBREPOSTO"}
-              </button>
-              <button className="flex items-center gap-1.5 px-2.5 py-1.5 border"
-                style={{ color: "#5a6a80", borderColor: "#1c2535" }}>
-                <Download size={12} />
-              </button>
-            </div>
+          <div style={{ padding: "10px 12px", borderTop: "0.5px solid #1c2535", display: "flex", gap: 8 }}>
+            <button
+              onClick={() => setSplitMode(v => !v)}
+              style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "6px 0", border: `0.5px solid ${splitMode ? "#00c8a8" : "#1c2535"}`, background: "transparent", color: splitMode ? "#00c8a8" : "#5a6a80", cursor: "pointer", fontSize: 11, letterSpacing: "0.06em" }}
+            >
+              {splitMode ? <BarChart2 size={12} /> : <Layers size={12} />}
+              {splitMode ? "SEPARADO" : "SOBREPOSTO"}
+            </button>
           </div>
-        </aside>
- 
-        {/* ── Chart Area ───────────────────────────────────────────────────── */}
-        <main className="flex-1 flex flex-col overflow-hidden">
+        </div>
+
+        {/* Chart area */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           {chartChannels.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full gap-3" style={{ color: "#3d5065" }}>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, color: "#3d5065" }}>
               <FlaskConical size={40} strokeWidth={1} />
-              <p style={{ fontFamily: "Barlow Condensed, sans-serif", letterSpacing: "0.1em", fontSize: 15 }}>
-                SELECIONE VARIÁVEIS NA BARRA LATERAL
-              </p>
-              <p style={{ fontSize: 13 }}>Clique em qualquer canal para adicionar ao gráfico</p>
+              <p style={{ letterSpacing: "0.1em", fontSize: 13 }}>SELECIONE VARIÁVEIS NA BARRA LATERAL</p>
             </div>
           ) : splitMode ? (
-            <div className="flex-1 overflow-hidden" style={{ display: "grid", gridTemplateRows: `repeat(${chartChannels.length}, 1fr)` }}>
-              {chartChannels.map((ch) => (
-                <SingleChannelChart
-                  key={ch.id} ch={ch} data={data} xDomain={xDomain}
-                  alarm={isAlarm(ch, lastPoint?.[ch.id] as number | undefined)}
-                  lastValue={lastPoint?.[ch.id] as number | undefined}
-                />
+            <div style={{ flex: 1, overflow: "hidden", display: "grid", gridTemplateRows: `repeat(${chartChannels.length}, 1fr)` }}>
+              {chartChannels.map(ch => (
+                <div key={ch.id} style={{ borderBottom: "0.5px solid #1c2535", minHeight: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 16px", borderBottom: "0.5px solid #1c2535" }}>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: ch.color }} />
+                    <span style={{ fontSize: 12, color: ch.color, fontWeight: 600 }}>{ch.label}</span>
+                    <span style={{ marginLeft: "auto", fontFamily: "monospace", fontSize: 14, color: ch.color }}>
+                      {fmt(latest?.[ch.id], (latest?.[ch.id] ?? 0) > 100 ? 0 : 1)} {ch.unit}
+                    </span>
+                  </div>
+                  <div style={{ height: "calc(100% - 34px)" }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={history} margin={{ top: 8, right: 16, left: 8, bottom: 4 }}>
+                        <defs>
+                          <linearGradient id={`g-${ch.id}`} x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor={ch.color} stopOpacity={0.15} />
+                            <stop offset="95%" stopColor={ch.color} stopOpacity={0} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="1 5" stroke="#1c2535" vertical={false} />
+                        <XAxis dataKey="_t" hide />
+                        <YAxis tick={{ fill: "#5a6a80", fontSize: 10 }} axisLine={false} tickLine={false} width={40} />
+                        <Tooltip content={<CustomTooltip />} />
+                        <Area dataKey={ch.id} name={ch.label} stroke={ch.color} strokeWidth={2} fill={`url(#g-${ch.id})`} dot={false} isAnimationActive={false} connectNulls />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
               ))}
             </div>
           ) : (
-            <div className="flex-1 flex flex-col overflow-hidden">
-              <div className="flex items-center gap-3 px-4 py-2.5 border-b shrink-0" style={{ borderColor: "#1c2535" }}>
-                <span style={{ fontSize: 11, letterSpacing: "0.14em", color: "#3d5065", fontFamily: "Barlow Condensed, sans-serif", textTransform: "uppercase" }}>
-                  Sobreposição
-                </span>
-                {chartChannels.map((ch) => (
-                  <div key={ch.id} className="flex items-center gap-1.5">
-                    <div className="w-3 h-0.5" style={{ background: ch.color }} />
-                    <span style={{ fontSize: 12, color: ch.color, fontFamily: "Barlow Condensed, sans-serif" }}>
-                      {ch.id}
-                    </span>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 16px", borderBottom: "0.5px solid #1c2535", flexShrink: 0 }}>
+                {chartChannels.map(ch => (
+                  <div key={ch.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <div style={{ width: 12, height: 2, background: ch.color, borderRadius: 1 }} />
+                    <span style={{ fontSize: 11, color: ch.color }}>{ch.label}</span>
                   </div>
                 ))}
               </div>
-              <div className="flex-1 min-h-0">
+              <div style={{ flex: 1, minHeight: 0 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={data} margin={{ top: 16, right: 28, left: 8, bottom: 12 }}>
+                  <LineChart data={history} margin={{ top: 16, right: 24, left: 8, bottom: 12 }}>
                     <CartesianGrid strokeDasharray="1 5" stroke="#1c2535" vertical={false} />
-                    <XAxis dataKey="t" type="number" domain={xDomain}
-                      tickFormatter={(v) => `${Number(v).toFixed(0)}s`}
-                      tick={{ fill: "#5a6a80", fontSize: 11, fontFamily: "JetBrains Mono, monospace" }}
-                      axisLine={{ stroke: "#1c2535" }} tickLine={false} />
-                    <YAxis
-                      tick={{ fill: "#5a6a80", fontSize: 11, fontFamily: "JetBrains Mono, monospace" }}
-                      axisLine={false} tickLine={false} width={48} />
-                    <Tooltip content={<ChartTooltip />} />
-                    {chartChannels.map((ch) => (
-                      <Line key={ch.id} dataKey={ch.id} stroke={ch.color} strokeWidth={2}
-                        dot={false} isAnimationActive={false} connectNulls />
+                    <XAxis dataKey="_t" hide />
+                    <YAxis tick={{ fill: "#5a6a80", fontSize: 11, fontFamily: "monospace" }} axisLine={false} tickLine={false} width={48} />
+                    <Tooltip content={<CustomTooltip />} />
+                    {chartChannels.map(ch => (
+                      <Line key={ch.id} dataKey={ch.id} name={ch.label} stroke={ch.color} strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
                     ))}
                   </LineChart>
                 </ResponsiveContainer>
               </div>
             </div>
           )}
- 
-          {/* ── Status Bar ────────────────────────────────────────────────── */}
-          <div className="flex items-center gap-4 px-4 shrink-0 border-t"
-            style={{ height: 32, borderColor: "#1c2535", background: "#0d1118" }}>
-            <div className="flex items-center gap-1.5">
-              <div className="w-2 h-2 rounded-full"
-                style={{ background: running ? "#00c8a8" : "#3d5065", boxShadow: running ? "0 0 6px #00c8a8" : "none" }} />
-              <span style={{ fontFamily: "Barlow Condensed, sans-serif", fontSize: 11, letterSpacing: "0.14em", color: running ? "#00c8a8" : "#3d5065" }}>
-                {running ? "AQUISIÇÃO ATIVA" : "AGUARDANDO"}
+
+          <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "0 16px", height: 32, borderTop: "0.5px solid #1c2535", background: "#0d1118", flexShrink: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: statusColor, boxShadow: status === "LIVE" ? `0 0 5px ${statusColor}` : "none" }} />
+              <span style={{ fontSize: 11, color: statusColor, letterSpacing: "0.1em" }}>
+                {status === "LIVE" ? "AQUISIÇÃO ATIVA" : "AGUARDANDO"}
               </span>
             </div>
-            <span style={{ fontSize: 11, color: "#3d5065", fontFamily: "JetBrains Mono, monospace" }}>
-              {(1000 / TICK_MS).toFixed(0)} Sa/s · BUF {data.length}/{BUFFER}
+            <span style={{ fontSize: 11, color: "#3d5065", fontFamily: "monospace" }}>
+              BUF {history.length}/{MAX_PTS} · {POLL_MS}ms poll
             </span>
-            <span style={{ fontSize: 11, color: "#3d5065", fontFamily: "JetBrains Mono, monospace" }}>
-              STACK: PEM · 100 CÉLULAS · 30 bar MAX
-            </span>
-            <div className="ml-auto flex items-center gap-2" style={{ fontSize: 11, color: "#3d5065", fontFamily: "Barlow Condensed, sans-serif", letterSpacing: "0.08em" }}>
-              <span>{selectedIds.length} CANAIS NO GRÁFICO</span>
-              <span>·</span>
-              <span>CLIQUE CANAL PARA ADICIONAR/REMOVER</span>
-            </div>
-          </div>
-        </main>
-      </div>
-    </div>
-  );
-}
- 
-// ─── Single Channel Chart (split mode) ───────────────────────────────────────
- 
-function SingleChannelChart({ ch, data, xDomain, alarm, lastValue }: {
-  ch: Channel; data: DataPoint[]; xDomain: [number, number];
-  alarm: boolean; lastValue: number | undefined;
-}) {
-  return (
-    <div className="flex flex-col border-b" style={{ borderColor: "#1c2535", minHeight: 0 }}>
-      <div className="flex items-center gap-3 px-4 py-2 shrink-0 border-b" style={{ borderColor: "#1c2535" }}>
-        <div className="w-2.5 h-2.5 rounded-full" style={{ background: alarm ? "#ef4444" : ch.color }} />
-        <span style={{ fontFamily: "Barlow Condensed, sans-serif", fontSize: 13, fontWeight: 600, color: alarm ? "#ef4444" : ch.color, letterSpacing: "0.1em" }}>
-          {ch.id}
-        </span>
-        <span style={{ fontSize: 12, color: "#5a6a80" }}>{ch.label}</span>
-        <div className="ml-auto flex items-center gap-4">
-          <div className="flex flex-col items-end">
-            <span style={{ fontSize: 10, color: "#3d5065", fontFamily: "Barlow Condensed, sans-serif" }}>ATUAL</span>
-            <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 17, fontWeight: 600, color: alarm ? "#ef4444" : ch.color, lineHeight: 1 }}>
-              {lastValue !== undefined ? fmt(lastValue, lastValue > 100 ? 1 : lastValue > 10 ? 2 : 3) : "—"}
-              <span style={{ fontSize: 11, marginLeft: 4, color: "#5a6a80" }}>{ch.unit}</span>
-            </span>
-          </div>
-          {alarm && (
-            <div className="flex items-center gap-1 px-2 py-0.5 border"
-              style={{ fontSize: 11, color: "#ef4444", borderColor: "#ef444440", background: "#ef444410", fontFamily: "Barlow Condensed, sans-serif" }}>
-              <AlertTriangle size={11} /> ALARME
-            </div>
-          )}
-          <div className="flex flex-col items-end">
-            <span style={{ fontSize: 10, color: "#3d5065", fontFamily: "Barlow Condensed, sans-serif" }}>FAIXA NOMINAL</span>
-            <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 12, color: "#5a6a80" }}>
-              {ch.nominalMin} – {ch.nominalMax} {ch.unit}
+            <span style={{ fontSize: 11, color: "#3d5065", fontFamily: "monospace" }}>
+              {selected.size} canais no gráfico
             </span>
           </div>
         </div>
-      </div>
-      <div className="flex-1 min-h-0">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data} margin={{ top: 8, right: 24, left: 8, bottom: 6 }}>
-            <defs>
-              <linearGradient id={`grad-${ch.id}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%"  stopColor={ch.color} stopOpacity={0.15} />
-                <stop offset="95%" stopColor={ch.color} stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="1 5" stroke="#1c2535" vertical={false} />
-            <XAxis dataKey="t" type="number" domain={xDomain}
-              tickFormatter={(v) => `${Number(v).toFixed(0)}s`}
-              tick={{ fill: "#5a6a80", fontSize: 11, fontFamily: "JetBrains Mono, monospace" }}
-              axisLine={{ stroke: "#1c2535" }} tickLine={false} />
-            <YAxis
-              domain={[ch.nominalMin - (ch.nominalMax - ch.nominalMin) * 0.05, ch.nominalMax + (ch.nominalMax - ch.nominalMin) * 0.05]}
-              tickFormatter={(v) => fmt(v, 1)}
-              tick={{ fill: "#5a6a80", fontSize: 11, fontFamily: "JetBrains Mono, monospace" }}
-              axisLine={false} tickLine={false} width={48} />
-            <Tooltip content={<ChartTooltip />} />
-            {ch.alarmHigh && <ReferenceLine y={ch.alarmHigh} stroke="#ef4444" strokeDasharray="3 3" strokeWidth={1} strokeOpacity={0.5} />}
-            {ch.alarmLow !== undefined && <ReferenceLine y={ch.alarmLow} stroke="#f59e0b" strokeDasharray="3 3" strokeWidth={1} strokeOpacity={0.5} />}
-            <Area dataKey={ch.id} stroke={ch.color} strokeWidth={2} fill={`url(#grad-${ch.id})`}
-              dot={false} isAnimationActive={false} connectNulls />
-          </AreaChart>
-        </ResponsiveContainer>
       </div>
     </div>
   );

@@ -125,3 +125,5 @@ temp/
 # Environment variables
 .env
 .env.*
+
+venv/
