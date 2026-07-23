@@ -50,6 +50,7 @@ CLP_PORT = 502
 # Endereço Ethernet local do computador.
 SOURCE_IP = "192.168.0.36"
 
+
 # Identificador lógico Modbus. Em muitos dispositivos Modbus TCP é 1.
 DEVICE_ID = 1
 
