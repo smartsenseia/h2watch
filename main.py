@@ -1,11 +1,9 @@
-
 # -*- coding: utf-8 -*-
 import os
 import sys
 import time
 import platform
 import subprocess
-import webbrowser
 from datetime import datetime
 from typing import Optional
 
@@ -14,7 +12,7 @@ from typing import Optional
 # ==========================================================
 
 ASSET_ID = os.environ.get("ASSET_ID", "MD01BR01")
-LOOP_SECONDS = float(os.environ.get("LOOP_SECONDS", "3.0"))
+LOOP_SECONDS = float(os.environ.get("LOOP_SECONDS", "5.0"))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 ALGO_DIR    = os.path.join(BASE_DIR, "ALGORITHMS_AND_DATA")
@@ -23,15 +21,25 @@ REACT_DIR   = os.path.join(BASE_DIR, "FRONTEND")
 
 SOM_SCRIPT = os.path.join(ALGO_DIR, "SOM.py")
 
-CLOUDFLARED_EXE    = r"C:\cloudflared\cloudflared.exe"
+CLOUDFLARED_EXE    = r"C:\Program Files (x86)\cloudflared\cloudflared.exe"
 CLOUDFLARED_CONFIG = os.path.join(BASE_DIR, "cloudflared_config.yml")
 
 CLP_IP        = "192.168.0.35"
 ETHERNET_IP   = "192.168.0.36"
 
-sys.path.append(ALGO_DIR)
+# A rota é conferida por tempo, não por contagem de ciclos: com
+# LOOP_SECONDS variável, contar ciclos dá um intervalo imprevisível.
+ROTA_CHECK_SECONDS = 60.0
 
-from ALGORITHMS_AND_DATA.connection import enviar_dados_clp
+# Espera extra depois de falhas seguidas do CLP, para não martelar um
+# equipamento fora do ar a cada LOOP_SECONDS.
+BACKOFF_MAX = 60.0
+
+# ATENÇÃO: não acrescente ALGO_DIR ao sys.path. Com ele no path, um
+# "import connection_clp" e um "import ALGORITHMS_AND_DATA.connection_clp"
+# criam dois objetos de módulo diferentes, cada um com sua própria conexão
+# Modbus e seu próprio contador de falhas. Use sempre o caminho do pacote.
+from ALGORITHMS_AND_DATA.connection import enviar_dados_clp, fechar as fechar_clp
 
 # ==========================================================
 # SOM
@@ -66,8 +74,32 @@ def processo_esta_vivo(proc: Optional[subprocess.Popen]) -> bool:
 # Rota estática CLP
 # ==========================================================
 
-def fixar_rota_clp():
-    """Garante que o tráfego para o CLP sempre sai pela Ethernet."""
+def rota_clp_existe() -> bool:
+    """Verifica se a rota para o CLP já aponta para a Ethernet."""
+    try:
+        saida = subprocess.run(
+            "route print -4", shell=True, capture_output=True
+        ).stdout.decode(errors="ignore")
+
+        for linha in saida.splitlines():
+            partes = linha.split()
+            if len(partes) >= 4 and partes[0] == CLP_IP and ETHERNET_IP in partes:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def fixar_rota_clp(forcar: bool = False):
+    """Garante que o tráfego para o CLP sempre sai pela Ethernet.
+
+    Só recria a rota quando ela está faltando. O par delete+add abre uma
+    janela sem rota para o CLP, e como a conexão Modbus é persistente,
+    isso derruba o socket e gera falha de leitura sem motivo aparente.
+    """
+    if not forcar and rota_clp_existe():
+        return
+
     try:
         subprocess.run(
             f"route delete {CLP_IP}",
@@ -80,7 +112,8 @@ def fixar_rota_clp():
         if result.returncode == 0:
             log(f"✅ Rota CLP fixada: {CLP_IP} → Ethernet ({ETHERNET_IP})")
         else:
-            log(f"⚠️ Falha ao fixar rota CLP: {result.stderr.decode(errors='ignore')}")
+            log(f"⚠️ Falha ao fixar rota CLP: {result.stderr.decode(errors='ignore').strip()}")
+            log("   Rodar como administrador costuma resolver.")
     except Exception as e:
         log(f"⚠️ Erro ao fixar rota: {e}")
 
@@ -231,7 +264,7 @@ def iniciar_som_service():
 def main():
 
     # Fixa rota do CLP antes de qualquer coisa
-    fixar_rota_clp()
+    fixar_rota_clp(forcar=True)
 
     matar_processos_portas(8000)
 
@@ -299,34 +332,60 @@ def main():
     log(f"📡 Sistema ativo | asset={ASSET_ID} | loop={LOOP_SECONDS}s")
 
     # ------------------------------------------------------
-    # Loop principal — refixar rota periodicamente
+    # Loop principal
     # ------------------------------------------------------
+
+    proxima_rota = time.monotonic() + ROTA_CHECK_SECONDS
+    falhas = 0
 
     try:
 
-        ciclo = 0
-
         while True:
 
-            # Refixar rota a cada 60 ciclos (~60s) para garantir
-            if ciclo % 60 == 0:
+            inicio = time.monotonic()
+
+            if inicio >= proxima_rota:
                 fixar_rota_clp()
+                proxima_rota = inicio + ROTA_CHECK_SECONDS
 
-            ok_read, res = safe_call(enviar_dados_clp)
+            # enviar_dados_clp trata os próprios erros e devolve bool.
+            # O safe_call fica só como rede contra falha inesperada; o
+            # resultado do envio está em "res", não em "ok_chamada".
+            ok_chamada, res = safe_call(enviar_dados_clp)
 
-            if not ok_read:
-                log(f"⚠️ Erro no ciclo PLC: {res}")
+            if not ok_chamada:
+                falhas += 1
+                log(f"⚠️ Erro inesperado no ciclo PLC: {res!r}")
+            elif res:
+                if falhas:
+                    log(f"✅ CLP recuperado após {falhas} ciclo(s) com falha.")
+                falhas = 0
+                # O próprio connection.py já loga o POST enviado; não
+                # repetir aqui para não duplicar cada linha do log.
             else:
-                log("✅ Dados PLC enviados para API")
+                falhas += 1
+                if falhas == 1 or falhas % 10 == 0:
+                    log(f"⚠️ Ciclo PLC sem envio (falha {falhas}).")
+                # A rota pode ter caído junto: revalida na próxima volta.
+                proxima_rota = 0.0
 
-            ciclo += 1
-            time.sleep(LOOP_SECONDS)
+            espera = LOOP_SECONDS if falhas == 0 else min(
+                BACKOFF_MAX, LOOP_SECONDS * (2 ** min(falhas, 6))
+            )
+            decorrido = time.monotonic() - inicio
+            time.sleep(max(0.0, espera - decorrido))
 
     except KeyboardInterrupt:
 
         log("🛑 Encerrando sistema...")
 
     finally:
+
+        # Fecha o socket Modbus antes dos subprocessos.
+        try:
+            fechar_clp()
+        except Exception:
+            pass
 
         for proc in (som_proc, cloudflared_proc, fastapi_proc):
 
@@ -335,6 +394,17 @@ def main():
                     proc.terminate()
             except Exception:
                 pass
+
+        for proc in (som_proc, cloudflared_proc, fastapi_proc):
+
+            try:
+                if proc:
+                    proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
 
 
 # ==========================================================
