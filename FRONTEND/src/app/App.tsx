@@ -14,17 +14,17 @@ const MAX_PTS = 60;
 const POLL_MS = 1500;
 
 const CHANNELS = [
-  { id: "vazao_1",   label: "Stack Voltage",  unit: "V",      group: "electrical", color: "#378ADD", min: 0, max: 600  },
-  { id: "vazao_2",   label: "Stack Current",  unit: "A",      group: "electrical", color: "#1D9E75", min: 0, max: 500  },
-  { id: "temp_1",    label: "Stack 1 Temp",   unit: "°C",     group: "thermal",    color: "#EF9F27", min: 0, max: 100  },
-  { id: "temp_3",    label: "Water Temp",     unit: "°C",     group: "thermal",    color: "#F0997B", min: 0, max: 60   },
-  { id: "temp_4",    label: "Col. A Temp",    unit: "°C",     group: "thermal",    color: "#FAC775", min: 0, max: 60   },
-  { id: "temp_5",    label: "Col. B Temp",    unit: "°C",     group: "thermal",    color: "#F5C4B3", min: 0, max: 60   },
-  { id: "pressao_1", label: "H₂ Pressure",   unit: "mbar",   group: "pressure",   color: "#EF9F27", min: 0, max: 4000 },
-  { id: "pressao_2", label: "Tank Pressure",  unit: "mbar",   group: "pressure",   color: "#7F77DD", min: 0, max: 4000 },
-  { id: "vazao_3",   label: "H₂ Flow",       unit: "L/min",  group: "flow",       color: "#5DCAA5", min: 0, max: 600  },
-  { id: "vazao_4",   label: "Water Volume",   unit: "L",      group: "flow",       color: "#85B7EB", min: 0, max: 600  },
-  { id: "valvula",   label: "Conductivity",   unit: "µS/cm",  group: "flow",       color: "#9FE1CB", min: 0, max: 30   },
+  { id: "stack_voltage",   label: "Stack Voltage",  unit: "V",      group: "electrical", color: "#378ADD", min: 0, max: 600  },
+  { id: "stack_current",   label: "Stack Current",  unit: "A",      group: "electrical", color: "#1D9E75", min: 0, max: 500  },
+  { id: "stack_1_temperature",    label: "Stack 1 Temp",   unit: "°C",     group: "thermal",    color: "#EF9F27", min: 0, max: 100  },
+  { id: "water_temperature",    label: "Water Temp",     unit: "°C",     group: "thermal",    color: "#F0997B", min: 0, max: 60   },
+  { id: "a_column_temperature",    label: "Col. A Temp",    unit: "°C",     group: "thermal",    color: "#FAC775", min: 0, max: 60   },
+  { id: "b_column_temperature",    label: "Col. B Temp",    unit: "°C",     group: "thermal",    color: "#F5C4B3", min: 0, max: 60   },
+  { id: "h2_pressure", label: "H₂ Pressure",   unit: "mbar",   group: "pressure",   color: "#EF9F27", min: 0, max: 4000 },
+  { id: "aim_tank_pressure", label: "Tank Pressure",  unit: "mbar",   group: "pressure",   color: "#7F77DD", min: 0, max: 4000 },
+  { id: "h2_flow",   label: "H₂ Flow",       unit: "L/min",  group: "flow",       color: "#5DCAA5", min: 0, max: 600  },
+  { id: "aim_water_volume",   label: "Water Volume",   unit: "L",      group: "flow",       color: "#85B7EB", min: 0, max: 600  },
+  { id: "water_conductivity",   label: "Conductivity",   unit: "µS/cm",  group: "flow",       color: "#9FE1CB", min: 0, max: 30   },
 ];
 
 const GROUP_META = {
@@ -35,11 +35,11 @@ const GROUP_META = {
 };
 
 const KPI_CHANNELS = [
-  { id: "vazao_1",   label: "Stack Voltage",  unit: "V",    color: "#378ADD", max: 600  },
-  { id: "vazao_2",   label: "Stack Current",  unit: "A",    color: "#1D9E75", max: 500  },
-  { id: "pressao_1", label: "H₂ Pressure",   unit: "mbar", color: "#EF9F27", max: 4000 },
-  { id: "pressao_2", label: "Tank Pressure",  unit: "mbar", color: "#7F77DD", max: 4000 },
-  { id: "vazao_3",   label: "H₂ Flow",       unit: "L/min",color: "#5DCAA5", max: 600  },
+  { id: "stack_voltage",   label: "Stack Voltage",  unit: "V",    color: "#378ADD", max: 600  },
+  { id: "stack_current",   label: "Stack Current",  unit: "A",    color: "#1D9E75", max: 500  },
+  { id: "h2_pressure", label: "H₂ Pressure",   unit: "mbar", color: "#EF9F27", max: 4000 },
+  { id: "aim_tank_pressure", label: "Tank Pressure",  unit: "mbar", color: "#7F77DD", max: 4000 },
+  { id: "h2_flow",   label: "H₂ Flow",       unit: "L/min",color: "#5DCAA5", max: 600  },
 ];
 
 function pct(v, max) { return Math.min(100, Math.max(0, (v / max) * 100)); }
@@ -105,7 +105,7 @@ function ChannelRow({ ch, value, selected, onSelect }) {
 export default function App() {
   const [history, setHistory] = useState([]);
   const [latest, setLatest] = useState(null);
-  const [selected, setSelected] = useState(new Set(["vazao_1", "vazao_2"]));
+  const [selected, setSelected] = useState(new Set(["stack_voltage", "stack_current"]));
   const [splitMode, setSplitMode] = useState(false);
   const [status, setStatus] = useState("STANDBY");
   const [lastId, setLastId] = useState(null);

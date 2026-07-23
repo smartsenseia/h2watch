@@ -1,7 +1,8 @@
 tunnel: fc3e6a35-7ef9-49c4-9670-48f2f18d1aa9
+credentials-file: "C:/Users/Labmems/.cloudflared/fc3e6a35-7ef9-49c4-9670-48f2f18d1aa9.json"
 
 ingress:
   - hostname: smartsenseiah2watch.org
-    service: http://localhost:8000
+    service: http://127.0.0.1:8000
 
   - service: http_status:404
