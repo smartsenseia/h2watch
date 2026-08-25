@@ -21,7 +21,7 @@ REACT_DIR   = os.path.join(BASE_DIR, "FRONTEND")
 
 SOM_SCRIPT = os.path.join(ALGO_DIR, "SOM.py")
 
-CLOUDFLARED_EXE    = r"C:\Program Files (x86)\cloudflared\cloudflared.exe"
+CLOUDFLARED_EXE = r"C:\cloudflared\cloudflared.exe"
 CLOUDFLARED_CONFIG = os.path.join(BASE_DIR, "cloudflared_config.yml")
 
 CLP_IP        = "192.168.0.35"
