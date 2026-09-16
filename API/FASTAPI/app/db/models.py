@@ -48,6 +48,17 @@ class Measurement(Base):
     # --- Secador -------------------------------------------------------------
     dryer_cycle = Column(Integer)       # contador do ciclo, n/300
 
+    # --- célula -------------------------------------------------------------
+    tensao_celula = Column(Float)       
+    corrente_celula = Column(Float)
+    tempo_de_operacao_celula = Column(Float)
+    conc_co2_celula = Column(Float)
+    Fan_pwm_celula = Column(Float)
+    fc_temperatura = Column(Float)
+    tensao_bateria_celula = Column(Float)
+    tensao_fc_celula = Column(Float)
+    corrente_fc_celula = Column(Float)
+
     __table_args__ = (
         # Consultas de telemetria quase sempre são "últimas N amostras".
         Index("ix_measurements_timestamp_desc", timestamp.desc()),
