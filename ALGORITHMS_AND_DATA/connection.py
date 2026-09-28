@@ -1,5 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Leitura periódica do eletrolisador e envio para a API.
+"""Leitura periódica do eletrolisador e da célula e envio para a API.
+
+Fontes de dados:
+
+    connection_clp      eletrolisador, Modbus TCP. É a fonte principal: se
+                        ela falhar, a amostra não é enviada.
+    connection_celula   célula, Modbus RTU na serial. É complementar: se
+                        ela falhar, a amostra vai assim mesmo, com os campos
+                        da célula em null (o model aceita buracos).
 
 Expõe duas formas de uso:
 
@@ -11,7 +19,7 @@ Expõe duas formas de uso:
                          este módulo sozinho (python -m ... / python
                          connection.py).
 
-Nos dois casos a conexão Modbus e o cliente HTTP são reaproveitados entre
+Nos dois casos as conexões Modbus e o cliente HTTP são reaproveitados entre
 as chamadas. Abrir e fechar o socket a cada amostra esgota portas em
 TIME_WAIT e alguns CLPs limitam conexões em rajada.
 """
@@ -26,8 +34,20 @@ import httpx
 # (ALGORITHMS_AND_DATA.connection), absoluto quando é executado direto.
 try:
     from .connection_clp import abrir_conexao, ler_dados, validar_blocos
+    from .connection_celula import (
+        BLOCOS_CELULA,
+        CAMPOS_CELULA,
+        abrir_conexao_celula,
+        ler_dados_celula,
+    )
 except ImportError:  # pragma: no cover
     from connection_clp import abrir_conexao, ler_dados, validar_blocos
+    from connection_celula import (
+        BLOCOS_CELULA,
+        CAMPOS_CELULA,
+        abrir_conexao_celula,
+        ler_dados_celula,
+    )
 
 __all__ = ["enviar_dados_clp", "montar_payload", "fechar", "main"]
 
@@ -39,6 +59,7 @@ API_URL = "http://localhost:8000/api/v1/endpoints/post"
 INTERVALO = 5.0
 BACKOFF_MAX = 60.0
 
+# Campos do eletrolisador (connection_clp.SINAIS).
 CAMPOS = (
     "stack_1_temperature",
     "water_temperature",
@@ -59,13 +80,25 @@ CAMPOS = (
 # Recursos reaproveitados entre chamadas.
 _http: httpx.Client | None = None
 _clp = None
+_celula = None
 _falhas = 0
+_falhas_celula = 0
 _blocos_validados = False
 
 
-def montar_payload(dados: dict[str, float]) -> dict:
+def montar_payload(
+    dados: dict[str, float],
+    dados_celula: dict[str, float | None] | None = None,
+) -> dict:
+    """Monta o JSON do POST.
+
+    Os campos da célula sempre entram no payload. Se a leitura da célula
+    falhou (dados_celula None) ou um sinal está sem mapa, vão como null.
+    """
+    dados_celula = dados_celula or {}
     payload = {"timestamp": datetime.now(timezone.utc).isoformat()}
     payload.update({campo: dados[campo] for campo in CAMPOS})
+    payload.update({campo: dados_celula.get(campo) for campo in CAMPOS_CELULA})
     return payload
 
 
@@ -90,8 +123,53 @@ def _validar_uma_vez() -> None:
     _blocos_validados = True
 
 
+def _fechar_celula() -> None:
+    global _celula
+    if _celula is not None:
+        try:
+            _celula.close()
+        except Exception:
+            pass
+        _celula = None
+
+
+def _ler_celula() -> dict[str, float | None] | None:
+    """Lê a célula sem nunca levantar exceção.
+
+    Devolve None se a leitura falhou por completo; nesse caso a porta é
+    fechada para ser reaberta na próxima amostra. Enquanto nenhum sinal da
+    célula tiver registrador mapeado, nem abre a serial.
+    """
+    global _celula, _falhas_celula
+
+    if not BLOCOS_CELULA:
+        return None
+
+    try:
+        if _celula is None:
+            _celula = abrir_conexao_celula()
+            print("Conectado à célula (serial).")
+
+        dados = ler_dados_celula(_celula)
+
+        if _falhas_celula:
+            print(f"Célula recuperada após {_falhas_celula} falha(s).")
+        _falhas_celula = 0
+        return dados
+
+    except Exception as erro:
+        _fechar_celula()
+        _falhas_celula += 1
+        if _falhas_celula == 1 or _falhas_celula % 10 == 0:
+            print(
+                f"Erro na célula (falha {_falhas_celula}), "
+                f"enviando sem esses campos: {erro}"
+            )
+        return None
+
+
 def fechar() -> None:
-    """Libera a conexão Modbus e o cliente HTTP."""
+    """Libera as conexões Modbus e o cliente HTTP."""
     global _http, _clp
     if _clp is not None:
         try:
@@ -99,6 +177,7 @@ def fechar() -> None:
         except Exception:
             pass
         _clp = None
+    _fechar_celula()
     if _http is not None:
         _http.close()
         _http = None
@@ -108,10 +187,11 @@ atexit.register(fechar)
 
 
 def enviar_dados_clp() -> bool:
-    """Lê o CLP e publica na API. Devolve True se o POST foi aceito.
+    """Lê o eletrolisador e a célula e publica na API.
 
-    Mantida com o nome e o comportamento tolerante a falha da versão
-    anterior, para não quebrar quem já a importa.
+    Devolve True se o POST foi aceito. Mantida com o nome e o
+    comportamento tolerante a falha da versão anterior, para não quebrar
+    quem já a importa.
     """
     global _clp, _falhas
 
@@ -122,7 +202,10 @@ def enviar_dados_clp() -> bool:
             _clp = abrir_conexao()
             print("Conectado ao CLP.")
 
-        payload = montar_payload(ler_dados(_clp))
+        dados = ler_dados(_clp)
+        dados_celula = _ler_celula()  # nunca levanta; None se falhou
+
+        payload = montar_payload(dados, dados_celula)
 
         resposta = _http_client().post(API_URL, json=payload)
         resposta.raise_for_status()
@@ -134,15 +217,20 @@ def enviar_dados_clp() -> bool:
         return True
 
     except httpx.HTTPError as erro:
-        # A leitura funcionou, o problema foi na API. Mantém o socket Modbus.
+        # A leitura funcionou, o problema foi na API. Mantém as conexões
+        # Modbus.
         _falhas += 1
         if _falhas == 1 or _falhas % 10 == 0:
-            print(f"Erro HTTP (falha {_falhas}): {erro}")
+            detalhe = ""
+            if isinstance(erro, httpx.HTTPStatusError):
+                # Num 422, o corpo diz qual campo o schema recusou.
+                detalhe = f" | resposta: {erro.response.text[:500]}"
+            print(f"Erro HTTP (falha {_falhas}): {erro}{detalhe}")
         return False
 
     except (ConnectionError, RuntimeError, OSError) as erro:
-        # Problema do lado do CLP: derruba o socket para reconectar na
-        # próxima chamada.
+        # Problema do lado do CLP do eletrolisador: derruba o socket para
+        # reconectar na próxima chamada.
         if _clp is not None:
             try:
                 _clp.close()
